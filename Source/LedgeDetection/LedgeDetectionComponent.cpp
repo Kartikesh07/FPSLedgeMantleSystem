@@ -6,6 +6,10 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimInstance.h"
+#include "MotionWarpingComponent.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 
@@ -18,6 +22,15 @@ void ULedgeDetectionComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	CharacterOwner = Cast<ACharacter>(GetOwner());
+	if (CharacterOwner)
+	{
+		MotionWarpingComp = CharacterOwner->FindComponentByClass<UMotionWarpingComponent>();
+		if (USkeletalMeshComponent* Mesh = CharacterOwner->GetMesh())
+		{
+			DefaultMeshRelativeLocation = Mesh->GetRelativeLocation();
+			DefaultMeshRelativeRotation = Mesh->GetRelativeRotation();
+		}
+	}
 	SetComponentTickEnabled(false);
 }
 
@@ -63,9 +76,15 @@ bool ULedgeDetectionComponent::DetectLedge(FLedgeDetectionResult& OutResult)
 		return false;
 	}
 
-	// 5. Capsule clearance check on top of the ledge (Mantle destination)
-	FVector TargetLandingLocation = TopHit.ImpactPoint + (-WallHit.ImpactNormal * (CapsuleRadius + 5.0f));
-	TargetLandingLocation.Z = TopHit.ImpactPoint.Z + CapsuleHalfHeight + 2.0f;
+	// 5. Calculate precise ledge edge and capsule landing position
+	const FVector WallPlaneNormal = WallHit.ImpactNormal.GetSafeNormal2D();
+	// Project TopHit.ImpactPoint onto the wall plane to find the exact corner edge of the obstacle
+	const float DistFromWallPlane = FVector::DotProduct(TopHit.ImpactPoint - WallHit.ImpactPoint, WallPlaneNormal);
+	const FVector TrueLedgeEdge = TopHit.ImpactPoint - (WallPlaneNormal * DistFromWallPlane);
+
+	// Capsule landing location: safe distance inward on the ledge, bottom exactly flush with roof
+	FVector TargetLandingLocation = TrueLedgeEdge + (-WallPlaneNormal * (CapsuleRadius + 15.0f));
+	TargetLandingLocation.Z = TopHit.ImpactPoint.Z + CapsuleHalfHeight;
 
 	if (!CheckCapsuleClearance(TargetLandingLocation))
 	{
@@ -76,7 +95,7 @@ bool ULedgeDetectionComponent::DetectLedge(FLedgeDetectionResult& OutResult)
 	OutResult.bLedgeFound = true;
 	OutResult.WallLocation = WallHit.ImpactPoint;
 	OutResult.WallNormal = WallHit.ImpactNormal;
-	OutResult.LedgeLocation = TopHit.ImpactPoint;
+	OutResult.LedgeLocation = TrueLedgeEdge;
 	OutResult.LedgeNormal = TopHit.ImpactNormal;
 	OutResult.LedgeHeight = LedgeHeight;
 	OutResult.TargetLandingLocation = TargetLandingLocation;
@@ -275,11 +294,7 @@ bool ULedgeDetectionComponent::StartTransition(const FLedgeDetectionResult& Resu
 
 	const float CapsuleHalfHeight = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 	TransitionStartLocation = CharacterOwner->GetActorLocation();
-
-	// Temporarily switch to flying and ignore WorldStatic collision to avoid snagging on corners
-	CharacterOwner->GetCharacterMovement()->SetMovementMode(MOVE_Flying);
-	CharacterOwner->GetCharacterMovement()->Velocity = FVector::ZeroVector;
-	CharacterOwner->GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Ignore);
+	TransitionStartRotation = CharacterOwner->GetActorRotation();
 
 	if (Result.ActionType == ELedgeActionType::Vault)
 	{
@@ -309,19 +324,164 @@ bool ULedgeDetectionComponent::StartTransition(const FLedgeDetectionResult& Resu
 		CurrentTransitionDuration = (Result.ActionType == ELedgeActionType::HighMantle) ? HighMantleDuration : LowMantleDuration;
 		TransitionTargetLocation = Result.TargetLandingLocation;
 
-		// Lift vertically first to clear edge, then step onto surface
+		const float CapsuleRadius = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleRadius();
+
+		// Optimal distance from wall face: Capsule radius + 4cm buffer (natural hanging posture, never penetrates wall)
+		const float OptimalWallDistance = CapsuleRadius + 4.0f;
+		const FVector WallPlaneNormal = Result.WallNormal.GetSafeNormal2D();
+		const FVector WallSweetSpot = Result.LedgeLocation + (WallPlaneNormal * OptimalWallDistance);
+
 		TransitionControlLocation = FVector(
-			TransitionStartLocation.X,
-			TransitionStartLocation.Y,
-			Result.LedgeLocation.Z + CapsuleHalfHeight + 6.0f
+			WallSweetSpot.X,
+			WallSweetSpot.Y,
+			Result.LedgeLocation.Z + CapsuleHalfHeight
 		);
 
-		// Align yaw perpendicular to wall
-		TransitionTargetRotation = FRotationMatrix::MakeFromX(-Result.WallNormal).Rotator();
+		// Align yaw perpendicular into the wall
+		TransitionTargetRotation = FRotationMatrix::MakeFromX(-WallPlaneNormal).Rotator();
 	}
 
 	TransitionTargetRotation.Pitch = 0.0f;
 	TransitionTargetRotation.Roll = 0.0f;
+
+	// Temporarily switch to flying and ignore WorldStatic collision to avoid snagging on corners
+	CharacterOwner->GetCharacterMovement()->SetMovementMode(MOVE_Flying);
+	CharacterOwner->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+	CharacterOwner->GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Ignore);
+
+	// Ensure mesh starts and stays at default relative transform
+	if (USkeletalMeshComponent* Mesh = CharacterOwner->GetMesh())
+	{
+		Mesh->SetRelativeLocationAndRotation(DefaultMeshRelativeLocation, DefaultMeshRelativeRotation, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
+	// Reset any spring arm offset so camera tracks smoothly via camera lag
+	if (ALedgeCharacter* LedgeChar = Cast<ALedgeCharacter>(CharacterOwner))
+	{
+		if (USpringArmComponent* Boom = LedgeChar->GetCameraBoom())
+		{
+			Boom->TargetOffset = FVector::ZeroVector;
+		}
+	}
+
+	// Lazy lookup for Motion Warping Component if not already cached
+	if (!MotionWarpingComp && CharacterOwner)
+	{
+		MotionWarpingComp = CharacterOwner->FindComponentByClass<UMotionWarpingComponent>();
+		if (!MotionWarpingComp)
+		{
+			MotionWarpingComp = NewObject<UMotionWarpingComponent>(CharacterOwner, TEXT("DynamicMotionWarpingComp"));
+			if (MotionWarpingComp)
+			{
+				MotionWarpingComp->RegisterComponent();
+			}
+		}
+	}
+
+	bIsMotionWarpingActive = (bUseMotionWarping && MotionWarpingComp != nullptr);
+
+	if (bIsMotionWarpingActive)
+	{
+		// 1. LedgeGrab: The ledge edge where hands plant, facing perpendicular into the wall
+		MotionWarpingComp->AddOrUpdateWarpTargetFromLocationAndRotation(
+			WarpLedgeGrabName,
+			Result.LedgeLocation,
+			TransitionTargetRotation
+		);
+
+		// 2. LedgeLanding: Final landing spot on top of the ledge (or other side of vault)
+		MotionWarpingComp->AddOrUpdateWarpTargetFromLocationAndRotation(
+			WarpLedgeLandingName,
+			TransitionTargetLocation,
+			TransitionTargetRotation
+		);
+
+		if (GEngine && bDrawDebug)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan,
+				FString::Printf(TEXT("[Motion Warping] Targets Added: '%s' & '%s'"),
+					*WarpLedgeGrabName.ToString(), *WarpLedgeLandingName.ToString()));
+		}
+	}
+	else
+	{
+		if (GEngine && bDrawDebug)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 4.0f, FColor::Orange,
+				FString::Printf(TEXT("[Motion Warping] Inactive! bUseMW=%d, Comp=%s"),
+					bUseMotionWarping, MotionWarpingComp ? TEXT("Valid") : TEXT("NULL")));
+		}
+	}
+
+	// Determine corresponding montage
+	ActiveMontage = nullptr;
+	switch (Result.ActionType)
+	{
+	case ELedgeActionType::Vault:
+		ActiveMontage = VaultMontage;
+		CurrentTransitionDuration = VaultDuration;
+		break;
+	case ELedgeActionType::LowMantle:
+		ActiveMontage = LowMantleMontage;
+		CurrentTransitionDuration = LowMantleDuration;
+		break;
+	case ELedgeActionType::HighMantle:
+		ActiveMontage = HighMantleMontage;
+		CurrentTransitionDuration = HighMantleDuration;
+		break;
+	default:
+		CurrentTransitionDuration = 1.0f;
+		break;
+	}
+
+	// Play montage and register completion delegates
+	if (ActiveMontage && CharacterOwner)
+	{
+		const float EffectivePlayRate = FMath::Max(MontagePlayRate, 0.1f);
+		const float MontageLength = CharacterOwner->PlayAnimMontage(ActiveMontage, EffectivePlayRate);
+		if (MontageLength > 0.0f)
+		{
+			if (bSyncDurationToMontage)
+			{
+				CurrentTransitionDuration = MontageLength / EffectivePlayRate;
+			}
+
+			// Bind montage ended delegate to finish transition only when the animation completes
+			if (USkeletalMeshComponent* MeshComp = CharacterOwner->GetMesh())
+			{
+				if (UAnimInstance* AnimInst = MeshComp->GetAnimInstance())
+				{
+					FOnMontageEnded EndDelegate;
+					EndDelegate.BindUObject(this, &ULedgeDetectionComponent::OnMontageEnded);
+					AnimInst->Montage_SetEndDelegate(EndDelegate, ActiveMontage);
+				}
+			}
+
+			if (GEngine && bDrawDebug)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Green,
+					FString::Printf(TEXT("[Ledge Montage] %s | Duration: %.2fs | MW: %s"),
+						*ActiveMontage->GetName(), CurrentTransitionDuration,
+						bIsMotionWarpingActive ? TEXT("ACTIVE") : TEXT("OFF")));
+			}
+		}
+		else
+		{
+			if (GEngine && bDrawDebug)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 4.0f, FColor::Yellow,
+					FString::Printf(TEXT("[Ledge Montage] PlayAnimMontage returned 0 for %s! Check Slot name / AnimInstance!"), *ActiveMontage->GetName()));
+			}
+		}
+	}
+	else if (!ActiveMontage)
+	{
+		if (GEngine && bDrawDebug)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 4.0f, FColor::Red,
+				TEXT("[Ledge Montage] No Montage assigned! Check BP_LedgeCharacter -> LedgeDetector properties."));
+		}
+	}
 
 	SetComponentTickEnabled(true);
 	return true;
@@ -338,23 +498,97 @@ void ULedgeDetectionComponent::UpdateTransition(float DeltaTime)
 	TransitionTimeElapsed += DeltaTime;
 	const float NormalizedTime = FMath::Clamp(TransitionTimeElapsed / CurrentTransitionDuration, 0.0f, 1.0f);
 
-	// Smooth Ease-in / Ease-out curve
-	const float Alpha = FMath::SmoothStep(0.0f, 1.0f, NormalizedTime);
+	if (bIsMotionWarpingActive)
+	{
+		// True Root Motion + Motion Warping: The animation's root motion physically drives the capsule!
+		// We do NOT override actor location with SetActorLocation so root motion has 100% control.
+		ApplyCameraOffset(NormalizedTime);
 
-	// Quadratic Bezier Interpolation
-	const float OneMinusAlpha = 1.0f - Alpha;
-	const FVector NewLocation = (OneMinusAlpha * OneMinusAlpha * TransitionStartLocation)
-		+ (2.0f * OneMinusAlpha * Alpha * TransitionControlLocation)
-		+ (Alpha * Alpha * TransitionTargetLocation);
+		// Safety watchdog: In case animation fails to notify completion
+		if (TransitionTimeElapsed >= (CurrentTransitionDuration + 0.35f))
+		{
+			FinishTransition();
+		}
+		return;
+	}
+
+	FVector NewLocation = TransitionStartLocation;
+
+	if (CurrentAction == ELedgeActionType::Vault)
+	{
+		// Smooth parabolic arc over the crest for vaults
+		const float Alpha = FMath::SmoothStep(0.0f, 1.0f, NormalizedTime);
+		const float OneMinusAlpha = 1.0f - Alpha;
+		NewLocation = (OneMinusAlpha * OneMinusAlpha * TransitionStartLocation)
+			+ (2.0f * OneMinusAlpha * Alpha * TransitionControlLocation)
+			+ (Alpha * Alpha * TransitionTargetLocation);
+	}
+	else // Low or High Mantle (Biomechanical human climb matching ALS keyframes)
+	{
+		// 1. Horizontal XY Position:
+		// t = 0.00 -> 0.15: Slide into wall sweet spot (hands reach & grab ledge edge)
+		// t = 0.15 -> 0.55: Hold steady close to wall as arms pull body straight up
+		// t = 0.55 -> 0.92: Push forward onto top landing surface as chest/pelvis clears crest
+		// t = 0.92 -> 1.00: Settle on top
+		FVector CurrentXY;
+		if (NormalizedTime < 0.15f)
+		{
+			const float tXY = FMath::SmoothStep(0.0f, 1.0f, NormalizedTime / 0.15f);
+			CurrentXY = FMath::Lerp(
+				FVector(TransitionStartLocation.X, TransitionStartLocation.Y, 0.0f),
+				FVector(TransitionControlLocation.X, TransitionControlLocation.Y, 0.0f),
+				tXY
+			);
+		}
+		else if (NormalizedTime < 0.55f)
+		{
+			CurrentXY = FVector(TransitionControlLocation.X, TransitionControlLocation.Y, 0.0f);
+		}
+		else if (NormalizedTime < 0.92f)
+		{
+			const float tXY = FMath::SmoothStep(0.0f, 1.0f, (NormalizedTime - 0.55f) / 0.37f);
+			CurrentXY = FMath::Lerp(
+				FVector(TransitionControlLocation.X, TransitionControlLocation.Y, 0.0f),
+				FVector(TransitionTargetLocation.X, TransitionTargetLocation.Y, 0.0f),
+				tXY
+			);
+		}
+		else
+		{
+			CurrentXY = FVector(TransitionTargetLocation.X, TransitionTargetLocation.Y, 0.0f);
+		}
+
+		// 2. Vertical Z Position:
+		// t = 0.00 -> 0.15: Hold at start height (reach / plant hands on ledge)
+		// t = 0.15 -> 0.70: Powerful muscular pull-up in lockstep with arm pull
+		// t = 0.70 -> 1.00: Hold at top landing height (feet touching floor surface)
+		float CurrentZ = TransitionStartLocation.Z;
+		if (NormalizedTime < 0.15f)
+		{
+			CurrentZ = TransitionStartLocation.Z;
+		}
+		else if (NormalizedTime < 0.70f)
+		{
+			const float tZ = (NormalizedTime - 0.15f) / 0.55f;
+			const float ZAlpha = FMath::InterpEaseInOut(0.0f, 1.0f, tZ, 2.0f);
+			CurrentZ = FMath::Lerp(TransitionStartLocation.Z, TransitionTargetLocation.Z, ZAlpha);
+		}
+		else
+		{
+			CurrentZ = TransitionTargetLocation.Z;
+		}
+
+		NewLocation = FVector(CurrentXY.X, CurrentXY.Y, CurrentZ);
+	}
 
 	CharacterOwner->SetActorLocation(NewLocation, false, nullptr, ETeleportType::TeleportPhysics);
 
-	// Smoothly align character yaw
-	const FRotator CurrentRot = CharacterOwner->GetActorRotation();
-	const FRotator NewRot = FMath::RInterpTo(CurrentRot, TransitionTargetRotation, DeltaTime, 14.0f);
-	CharacterOwner->SetActorRotation(FRotator(0.0f, NewRot.Yaw, 0.0f));
+	// Yaw alignment: smooth rotation facing perpendicular into the wall during the grab phase (0.0 -> 0.15)
+	const float RotAlpha = FMath::Clamp(NormalizedTime / 0.15f, 0.0f, 1.0f);
+	const float SmoothRotAlpha = FMath::SmoothStep(0.0f, 1.0f, RotAlpha);
+	const FRotator TargetRot = FMath::Lerp(TransitionStartRotation, TransitionTargetRotation, SmoothRotAlpha);
+	CharacterOwner->SetActorRotation(FRotator(0.0f, TargetRot.Yaw, 0.0f));
 
-	// Procedural first-person camera weight dip
 	ApplyCameraOffset(NormalizedTime);
 
 	if (NormalizedTime >= 1.0f)
@@ -365,12 +599,38 @@ void ULedgeDetectionComponent::UpdateTransition(float DeltaTime)
 
 void ULedgeDetectionComponent::FinishTransition()
 {
+	if (!bIsTransitioning)
+	{
+		return;
+	}
+
 	bIsTransitioning = false;
 	SetComponentTickEnabled(false);
 
 	if (CharacterOwner)
 	{
-		// Snap to exact destination
+		// Ensure mesh relative transform remains at default
+		if (USkeletalMeshComponent* Mesh = CharacterOwner->GetMesh())
+		{
+			Mesh->SetRelativeLocationAndRotation(DefaultMeshRelativeLocation, DefaultMeshRelativeRotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+			if (UAnimInstance* AnimInst = Mesh->GetAnimInstance())
+			{
+				if (ActiveMontage)
+				{
+					FOnMontageEnded DummyEnded;
+					AnimInst->Montage_SetEndDelegate(DummyEnded, ActiveMontage);
+				}
+			}
+		}
+
+		if (ActiveMontage)
+		{
+			CharacterOwner->StopAnimMontage(ActiveMontage);
+			ActiveMontage = nullptr;
+		}
+
+		// Snap capsule to exact destination
 		CharacterOwner->SetActorLocation(TransitionTargetLocation, false, nullptr, ETeleportType::TeleportPhysics);
 		CharacterOwner->SetActorRotation(FRotator(0.0f, TransitionTargetRotation.Yaw, 0.0f));
 
@@ -391,6 +651,14 @@ void ULedgeDetectionComponent::FinishTransition()
 		}
 	}
 
+	// Clean up Motion Warping targets
+	if (MotionWarpingComp)
+	{
+		MotionWarpingComp->RemoveWarpTarget(WarpLedgeGrabName);
+		MotionWarpingComp->RemoveWarpTarget(WarpLedgeLandingName);
+	}
+	bIsMotionWarpingActive = false;
+
 	ResetCameraOffset();
 	CurrentAction = ELedgeActionType::None;
 }
@@ -398,6 +666,32 @@ void ULedgeDetectionComponent::FinishTransition()
 void ULedgeDetectionComponent::CancelTransition()
 {
 	if (bIsTransitioning)
+	{
+		if (CharacterOwner)
+		{
+			if (USkeletalMeshComponent* Mesh = CharacterOwner->GetMesh())
+			{
+				Mesh->SetRelativeLocationAndRotation(DefaultMeshRelativeLocation, DefaultMeshRelativeRotation, false, nullptr, ETeleportType::TeleportPhysics);
+			}
+
+			if (ActiveMontage)
+			{
+				CharacterOwner->StopAnimMontage(ActiveMontage);
+				ActiveMontage = nullptr;
+			}
+		}
+		FinishTransition();
+	}
+}
+
+void ULedgeDetectionComponent::OnMontageBlendingOut(UAnimMontage* Montage, bool bInterrupted)
+{
+	// Do not cut transition short during blend-out; let the cross-fade complete smoothly
+}
+
+void ULedgeDetectionComponent::OnMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+	if (bIsTransitioning && Montage == ActiveMontage)
 	{
 		FinishTransition();
 	}

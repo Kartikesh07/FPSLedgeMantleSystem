@@ -13,6 +13,7 @@ class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
 class ULedgeDetectionComponent;
+class UMotionWarpingComponent;
 
 UCLASS(config=Game)
 class LEDGEDETECTION_API ALedgeCharacter : public ACharacter
@@ -30,6 +31,10 @@ class LEDGEDETECTION_API ALedgeCharacter : public ACharacter
 	/** Ledge Detection Component */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Ledge Detection", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<ULedgeDetectionComponent> LedgeDetectionComponent;
+
+	/** Motion Warping Component */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Motion Warping", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMotionWarpingComponent> MotionWarpingComponent;
 
 public:
 	ALedgeCharacter();
@@ -76,4 +81,7 @@ public:
 
 	/** Alias for backward compatibility **/
 	FORCEINLINE UCameraComponent* GetFirstPersonCameraComponent() const { return FollowCamera; }
+
+	/** Returns MotionWarpingComponent subobject **/
+	FORCEINLINE UMotionWarpingComponent* GetMotionWarpingComponent() const { return MotionWarpingComponent; }
 };
