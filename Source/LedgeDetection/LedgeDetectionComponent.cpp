@@ -43,7 +43,7 @@ bool ULedgeDetectionComponent::DetectLedge(FLedgeDetectionResult& OutResult)
 	}
 
 	// 3. Slope check - is top surface walkable?
-	const float WalkableZ = CharacterOwner->GetCharacterMovement() ? CharacterOwner->GetCharacterMovement()->WalkableFloorZ : 0.7f;
+	const float WalkableZ = CharacterOwner->GetCharacterMovement() ? CharacterOwner->GetCharacterMovement()->GetWalkableFloorZ() : 0.7f;
 	if (TopHit.ImpactNormal.Z < WalkableZ)
 	{
 		return false;
