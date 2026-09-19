@@ -59,6 +59,10 @@ protected:
 	void Look(const FInputActionValue& Value);
 
 public:
+	/** Returns true if currently mantling or vaulting */
+	UFUNCTION(BlueprintCallable, Category = "Ledge Detection")
+	bool IsLedgeTransitioning() const;
+
 	/** Returns FirstPersonCameraComponent subobject **/
 	FORCEINLINE UCameraComponent* GetFirstPersonCameraComponent() const { return FirstPersonCameraComponent; }
 };

@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LedgeDetectionComponent.h"
+#include "LedgeCharacter.h"
+#include "Camera/CameraComponent.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -9,13 +11,14 @@
 
 ULedgeDetectionComponent::ULedgeDetectionComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
 }
 
 void ULedgeDetectionComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	CharacterOwner = Cast<ACharacter>(GetOwner());
+	SetComponentTickEnabled(false);
 }
 
 bool ULedgeDetectionComponent::DetectLedge(FLedgeDetectionResult& OutResult)
@@ -246,5 +249,180 @@ void ULedgeDetectionComponent::DrawDebugVisuals(const FLedgeDetectionResult& Res
 	{
 		DrawDebugCapsule(World, Result.VaultLandingLocation, CapsuleHalfHeight, CapsuleRadius, FQuat::Identity, FColor::Orange, false, DebugDrawDuration, 0, 1.5f);
 		DrawDebugLine(World, Result.LedgeLocation, Result.VaultLandingLocation, FColor::Orange, false, DebugDrawDuration, 0, 2.0f);
+	}
+}
+
+void ULedgeDetectionComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (bIsTransitioning)
+	{
+		UpdateTransition(DeltaTime);
+	}
+}
+
+bool ULedgeDetectionComponent::StartTransition(const FLedgeDetectionResult& Result)
+{
+	if (!Result.bLedgeFound || !CharacterOwner || bIsTransitioning)
+	{
+		return false;
+	}
+
+	bIsTransitioning = true;
+	CurrentAction = Result.ActionType;
+	TransitionTimeElapsed = 0.0f;
+
+	const float CapsuleHalfHeight = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	TransitionStartLocation = CharacterOwner->GetActorLocation();
+
+	// Temporarily switch to flying and ignore WorldStatic collision to avoid snagging on corners
+	CharacterOwner->GetCharacterMovement()->SetMovementMode(MOVE_Flying);
+	CharacterOwner->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+	CharacterOwner->GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Ignore);
+
+	if (Result.ActionType == ELedgeActionType::Vault)
+	{
+		CurrentTransitionDuration = VaultDuration;
+		TransitionTargetLocation = Result.VaultLandingLocation;
+
+		// Apex is directly over the obstacle crest
+		TransitionControlLocation = FVector(
+			Result.LedgeLocation.X,
+			Result.LedgeLocation.Y,
+			Result.LedgeLocation.Z + CapsuleHalfHeight + 15.0f
+		);
+
+		// Direction of travel for vault
+		VaultForwardDirection = (Result.VaultLandingLocation - TransitionStartLocation).GetSafeNormal2D();
+		if (VaultForwardDirection.IsNearlyZero())
+		{
+			VaultForwardDirection = CharacterOwner->GetActorForwardVector();
+		}
+
+		// Keep or boost forward speed on landing
+		VaultExitSpeed = FMath::Max(CharacterOwner->GetCharacterMovement()->MaxWalkSpeed, 600.0f);
+		TransitionTargetRotation = FRotationMatrix::MakeFromX(VaultForwardDirection).Rotator();
+	}
+	else // Low or High Mantle
+	{
+		CurrentTransitionDuration = (Result.ActionType == ELedgeActionType::HighMantle) ? HighMantleDuration : LowMantleDuration;
+		TransitionTargetLocation = Result.TargetLandingLocation;
+
+		// Lift vertically first to clear edge, then step onto surface
+		TransitionControlLocation = FVector(
+			TransitionStartLocation.X,
+			TransitionStartLocation.Y,
+			Result.LedgeLocation.Z + CapsuleHalfHeight + 6.0f
+		);
+
+		// Align yaw perpendicular to wall
+		TransitionTargetRotation = FRotationMatrix::MakeFromX(-Result.WallNormal).Rotator();
+	}
+
+	TransitionTargetRotation.Pitch = 0.0f;
+	TransitionTargetRotation.Roll = 0.0f;
+
+	SetComponentTickEnabled(true);
+	return true;
+}
+
+void ULedgeDetectionComponent::UpdateTransition(float DeltaTime)
+{
+	if (!CharacterOwner)
+	{
+		FinishTransition();
+		return;
+	}
+
+	TransitionTimeElapsed += DeltaTime;
+	const float NormalizedTime = FMath::Clamp(TransitionTimeElapsed / CurrentTransitionDuration, 0.0f, 1.0f);
+
+	// Smooth Ease-in / Ease-out curve
+	const float Alpha = FMath::SmoothStep(0.0f, 1.0f, NormalizedTime);
+
+	// Quadratic Bezier Interpolation
+	const float OneMinusAlpha = 1.0f - Alpha;
+	const FVector NewLocation = (OneMinusAlpha * OneMinusAlpha * TransitionStartLocation)
+		+ (2.0f * OneMinusAlpha * Alpha * TransitionControlLocation)
+		+ (Alpha * Alpha * TransitionTargetLocation);
+
+	CharacterOwner->SetActorLocation(NewLocation, false, nullptr, ETeleportType::TeleportPhysics);
+
+	// Smoothly align character yaw
+	const FRotator CurrentRot = CharacterOwner->GetActorRotation();
+	const FRotator NewRot = FMath::RInterpTo(CurrentRot, TransitionTargetRotation, DeltaTime, 14.0f);
+	CharacterOwner->SetActorRotation(FRotator(0.0f, NewRot.Yaw, 0.0f));
+
+	// Procedural first-person camera weight dip
+	ApplyCameraOffset(NormalizedTime);
+
+	if (NormalizedTime >= 1.0f)
+	{
+		FinishTransition();
+	}
+}
+
+void ULedgeDetectionComponent::FinishTransition()
+{
+	bIsTransitioning = false;
+	SetComponentTickEnabled(false);
+
+	if (CharacterOwner)
+	{
+		// Snap to exact destination
+		CharacterOwner->SetActorLocation(TransitionTargetLocation, false, nullptr, ETeleportType::TeleportPhysics);
+		CharacterOwner->SetActorRotation(FRotator(0.0f, TransitionTargetRotation.Yaw, 0.0f));
+
+		// Restore collision response to static geometry
+		CharacterOwner->GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+
+		// Restore standard walking physics
+		CharacterOwner->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+
+		// If vaulting, preserve and launch with forward running momentum!
+		if (CurrentAction == ELedgeActionType::Vault)
+		{
+			CharacterOwner->GetCharacterMovement()->Velocity = VaultForwardDirection * VaultExitSpeed;
+		}
+		else
+		{
+			CharacterOwner->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+		}
+	}
+
+	ResetCameraOffset();
+	CurrentAction = ELedgeActionType::None;
+}
+
+void ULedgeDetectionComponent::CancelTransition()
+{
+	if (bIsTransitioning)
+	{
+		FinishTransition();
+	}
+}
+
+void ULedgeDetectionComponent::ApplyCameraOffset(float Alpha)
+{
+	ALedgeCharacter* LedgeChar = Cast<ALedgeCharacter>(CharacterOwner);
+	if (!LedgeChar || !LedgeChar->GetFirstPersonCameraComponent())
+	{
+		return;
+	}
+
+	// Sine wave dip: compresses down early, crests smoothly, returns to normal on landing
+	const float DipCurve = FMath::Sin(Alpha * PI);
+	const float ZOffset = -CameraDipMaxOffsetZ * DipCurve;
+
+	LedgeChar->GetFirstPersonCameraComponent()->SetRelativeLocation(FVector(0.f, 0.f, 64.0f + ZOffset));
+}
+
+void ULedgeDetectionComponent::ResetCameraOffset()
+{
+	ALedgeCharacter* LedgeChar = Cast<ALedgeCharacter>(CharacterOwner);
+	if (LedgeChar && LedgeChar->GetFirstPersonCameraComponent())
+	{
+		LedgeChar->GetFirstPersonCameraComponent()->SetRelativeLocation(FVector(0.f, 0.f, 64.0f));
 	}
 }

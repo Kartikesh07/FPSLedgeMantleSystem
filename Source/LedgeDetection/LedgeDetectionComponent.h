@@ -57,6 +57,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ledge Detection")
 	bool DetectLedge(FLedgeDetectionResult& OutResult);
 
+	/** Returns true if character is currently performing a mantle or vault */
+	UFUNCTION(BlueprintCallable, Category = "Ledge Transition")
+	bool IsTransitioning() const { return bIsTransitioning; }
+
+	/** Starts smooth procedural transition for the detected ledge */
+	UFUNCTION(BlueprintCallable, Category = "Ledge Transition")
+	bool StartTransition(const FLedgeDetectionResult& Result);
+
+	/** Cancels an active transition and restores walking mode */
+	UFUNCTION(BlueprintCallable, Category = "Ledge Transition")
+	void CancelTransition();
+
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	/** Duration (seconds) for vaulting over thin obstacles */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Transition|Durations")
+	float VaultDuration = 0.42f;
+
+	/** Duration (seconds) for low step-up mantles */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Transition|Durations")
+	float LowMantleDuration = 0.5f;
+
+	/** Duration (seconds) for high pull-up mantles */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Transition|Durations")
+	float HighMantleDuration = 0.75f;
+
+	/** Maximum downward camera offset in cm during mantle to simulate weight transfer */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Transition|Camera")
+	float CameraDipMaxOffsetZ = 8.0f;
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -64,10 +94,29 @@ protected:
 	UPROPERTY()
 	TObjectPtr<ACharacter> CharacterOwner;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Ledge Transition")
+	bool bIsTransitioning = false;
+
 private:
 	bool ForwardTrace(FHitResult& OutHit, FVector& OutForwardDir);
 	bool DownwardTrace(const FVector& WallImpactPoint, const FVector& WallNormal, FHitResult& OutHit);
 	bool CheckCapsuleClearance(const FVector& TargetLocation);
 	bool CheckVaultClearance(const FVector& WallImpactPoint, const FVector& ForwardDir, float ObstacleTopZ, FVector& OutVaultLandingLocation);
 	void DrawDebugVisuals(const FLedgeDetectionResult& Result);
+
+	// Transition trajectory state
+	float TransitionTimeElapsed = 0.0f;
+	float CurrentTransitionDuration = 0.5f;
+	FVector TransitionStartLocation = FVector::ZeroVector;
+	FVector TransitionControlLocation = FVector::ZeroVector;
+	FVector TransitionTargetLocation = FVector::ZeroVector;
+	FRotator TransitionTargetRotation = FRotator::ZeroRotator;
+	ELedgeActionType CurrentAction = ELedgeActionType::None;
+	FVector VaultForwardDirection = FVector::ZeroVector;
+	float VaultExitSpeed = 600.0f;
+
+	void UpdateTransition(float DeltaTime);
+	void FinishTransition();
+	void ApplyCameraOffset(float Alpha);
+	void ResetCameraOffset();
 };

@@ -37,10 +37,21 @@ ALedgeCharacter::ALedgeCharacter()
 	LedgeDetectionComponent = CreateDefaultSubobject<ULedgeDetectionComponent>(TEXT("LedgeDetector"));
 }
 
+bool ALedgeCharacter::IsLedgeTransitioning() const
+{
+	return LedgeDetectionComponent && LedgeDetectionComponent->IsTransitioning();
+}
+
 void ALedgeCharacter::Jump()
 {
 	if (LedgeDetectionComponent)
 	{
+		// Don't trigger another mantle if already transitioning
+		if (LedgeDetectionComponent->IsTransitioning())
+		{
+			return;
+		}
+
 		FLedgeDetectionResult Result;
 		if (LedgeDetectionComponent->DetectLedge(Result))
 		{
@@ -53,16 +64,20 @@ void ALedgeCharacter::Jump()
 			default: break;
 			}
 
-			const FString Msg = FString::Printf(TEXT("[Ledge Detected] Type: %s | Height: %.1f cm | Target: %s"),
-				*ActionName, Result.LedgeHeight, *Result.TargetLandingLocation.ToCompactString());
+			const FString Msg = FString::Printf(TEXT("[Ledge Action] %s | Height: %.1f cm"),
+				*ActionName, Result.LedgeHeight);
 
 			if (GEngine)
 			{
-				GEngine->AddOnScreenDebugMessage(-1, 4.0f, FColor::Green, Msg);
+				GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan, Msg);
 			}
 			UE_LOG(LogTemp, Log, TEXT("%s"), *Msg);
 
-			return;
+			// Start the smooth procedural transition
+			if (LedgeDetectionComponent->StartTransition(Result))
+			{
+				return;
+			}
 		}
 	}
 
@@ -126,6 +141,12 @@ void ALedgeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 void ALedgeCharacter::Move(const FInputActionValue& Value)
 {
+	// Ignore manual movement input during parkour transitions
+	if (IsLedgeTransitioning())
+	{
+		return;
+	}
+
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
 	if (Controller != nullptr)
