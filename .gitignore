@@ -1,0 +1,25 @@
+# Visual Studio / IDE temporary files
+.vs/
+.idea/
+.vscode/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Unreal Engine temporary and build folders
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# Crash dumps and logs
+*.log
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
