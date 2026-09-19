@@ -405,24 +405,9 @@ void ULedgeDetectionComponent::CancelTransition()
 
 void ULedgeDetectionComponent::ApplyCameraOffset(float Alpha)
 {
-	ALedgeCharacter* LedgeChar = Cast<ALedgeCharacter>(CharacterOwner);
-	if (!LedgeChar || !LedgeChar->GetFirstPersonCameraComponent())
-	{
-		return;
-	}
-
-	// Sine wave dip: compresses down early, crests smoothly, returns to normal on landing
-	const float DipCurve = FMath::Sin(Alpha * PI);
-	const float ZOffset = -CameraDipMaxOffsetZ * DipCurve;
-
-	LedgeChar->GetFirstPersonCameraComponent()->SetRelativeLocation(FVector(0.f, 0.f, 64.0f + ZOffset));
+	// Third-person camera is handled via SpringArm/CharacterMovement and animations
 }
 
 void ULedgeDetectionComponent::ResetCameraOffset()
 {
-	ALedgeCharacter* LedgeChar = Cast<ALedgeCharacter>(CharacterOwner);
-	if (LedgeChar && LedgeChar->GetFirstPersonCameraComponent())
-	{
-		LedgeChar->GetFirstPersonCameraComponent()->SetRelativeLocation(FVector(0.f, 0.f, 64.0f));
-	}
 }

@@ -8,6 +8,7 @@
 #include "LedgeDetectionTypes.h"
 #include "LedgeCharacter.generated.h"
 
+class USpringArmComponent;
 class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
@@ -18,9 +19,13 @@ class LEDGEDETECTION_API ALedgeCharacter : public ACharacter
 {
 	GENERATED_BODY()
 
-	/** First person camera */
+	/** Camera boom positioning the camera behind the character */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UCameraComponent> FirstPersonCameraComponent;
+	TObjectPtr<USpringArmComponent> CameraBoom;
+
+	/** Follow camera */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCameraComponent> FollowCamera;
 
 	/** Ledge Detection Component */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Ledge Detection", meta = (AllowPrivateAccess = "true"))
@@ -63,6 +68,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ledge Detection")
 	bool IsLedgeTransitioning() const;
 
-	/** Returns FirstPersonCameraComponent subobject **/
-	FORCEINLINE UCameraComponent* GetFirstPersonCameraComponent() const { return FirstPersonCameraComponent; }
+	/** Returns CameraBoom subobject **/
+	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
+
+	/** Returns FollowCamera subobject **/
+	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+
+	/** Alias for backward compatibility **/
+	FORCEINLINE UCameraComponent* GetFirstPersonCameraComponent() const { return FollowCamera; }
 };
