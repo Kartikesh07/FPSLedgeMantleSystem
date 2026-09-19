@@ -35,7 +35,7 @@ public:
 
 	/** Maximum obstacle thickness (depth) that can be vaulted over */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection|Dimensions")
-	float MaxVaultThickness = 90.0f;
+	float MaxVaultThickness = 120.0f;
 
 	/** Inward distance behind the wall face to trace downward for the top surface */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection|Dimensions")

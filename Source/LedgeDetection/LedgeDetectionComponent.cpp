@@ -110,6 +110,7 @@ bool ULedgeDetectionComponent::DetectLedge(FLedgeDetectionResult& OutResult)
 bool ULedgeDetectionComponent::ForwardTrace(FHitResult& OutHit, FVector& OutForwardDir)
 {
 	const float CapsuleHalfHeight = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	const FVector FeetLocation = CharacterOwner->GetActorLocation() - FVector(0.f, 0.f, CapsuleHalfHeight);
 	
 	// Use controller yaw rotation so player looks towards the intended ledge
 	FRotator ControlRot = CharacterOwner->GetControlRotation();
@@ -117,20 +118,39 @@ bool ULedgeDetectionComponent::ForwardTrace(FHitResult& OutHit, FVector& OutForw
 	ControlRot.Roll = 0.0f;
 	OutForwardDir = ControlRot.Vector();
 
-	// Trace forward from chest/eye level
-	const FVector TraceStart = CharacterOwner->GetActorLocation() + FVector(0.f, 0.f, CapsuleHalfHeight * 0.3f);
-	const FVector TraceEnd = TraceStart + (OutForwardDir * ForwardTraceDistance);
-
 	FCollisionQueryParams QueryParams(TEXT("LedgeForwardTrace"), false, CharacterOwner);
 
-	const bool bHit = GetWorld()->LineTraceSingleByChannel(OutHit, TraceStart, TraceEnd, TraceChannel, QueryParams);
+	// 1. High Trace (Chest height ~ 125 cm above feet): detects tall and medium walls
+	const FVector HighStart = FeetLocation + FVector(0.f, 0.f, 125.0f);
+	const FVector HighEnd = HighStart + (OutForwardDir * ForwardTraceDistance);
+	FHitResult HighHit;
+	const bool bHighHit = GetWorld()->LineTraceSingleByChannel(HighHit, HighStart, HighEnd, TraceChannel, QueryParams);
+
+	// 2. Low Trace (Hip/Waist height ~ 55 cm above feet): detects low vaultable obstacles (40 - 100 cm)
+	const FVector LowStart = FeetLocation + FVector(0.f, 0.f, 55.0f);
+	const FVector LowEnd = LowStart + (OutForwardDir * ForwardTraceDistance);
+	FHitResult LowHit;
+	const bool bLowHit = GetWorld()->LineTraceSingleByChannel(LowHit, LowStart, LowEnd, TraceChannel, QueryParams);
 
 	if (bDrawDebug)
 	{
-		DrawDebugLine(GetWorld(), TraceStart, bHit ? OutHit.ImpactPoint : TraceEnd, bHit ? FColor::Green : FColor::Red, false, DebugDrawDuration, 0, 1.5f);
+		DrawDebugLine(GetWorld(), HighStart, bHighHit ? HighHit.ImpactPoint : HighEnd, bHighHit ? FColor::Green : FColor::Red, false, DebugDrawDuration, 0, 1.5f);
+		DrawDebugLine(GetWorld(), LowStart, bLowHit ? LowHit.ImpactPoint : LowEnd, bLowHit ? FColor::Green : FColor::Red, false, DebugDrawDuration, 0, 1.5f);
 	}
 
-	return bHit && OutHit.bBlockingHit;
+	// Prefer High hit for alignment if both hit; otherwise use Low hit for low obstacles
+	if (bHighHit && HighHit.bBlockingHit)
+	{
+		OutHit = HighHit;
+		return true;
+	}
+	else if (bLowHit && LowHit.bBlockingHit)
+	{
+		OutHit = LowHit;
+		return true;
+	}
+
+	return false;
 }
 
 bool ULedgeDetectionComponent::DownwardTrace(const FVector& WallImpactPoint, const FVector& WallNormal, FHitResult& OutHit)
