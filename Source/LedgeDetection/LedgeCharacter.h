@@ -11,6 +11,7 @@ class USpringArmComponent;
 class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
+class ULedgeDetectionComponent;
 
 UCLASS(config=Game)
 class LEDGEDETECTION_API ALedgeCharacter : public ACharacter
@@ -25,8 +26,14 @@ class LEDGEDETECTION_API ALedgeCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCameraComponent> FollowCamera;
 
+	/** Ledge Detection Component */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Ledge Detection", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<ULedgeDetectionComponent> LedgeDetectionComponent;
+
 public:
 	ALedgeCharacter();
+
+	virtual void Jump() override;
 
 	/** MappingContext for player input */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
@@ -60,4 +67,7 @@ public:
 
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+
+	/** Returns LedgeDetectionComponent subobject **/
+	FORCEINLINE ULedgeDetectionComponent* GetLedgeDetectionComponent() const { return LedgeDetectionComponent; }
 };

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LedgeCharacter.h"
+#include "LedgeDetectionComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -48,6 +49,9 @@ ALedgeCharacter::ALedgeCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
+	// Create Ledge Detection Component
+	LedgeDetectionComponent = CreateDefaultSubobject<ULedgeDetectionComponent>(TEXT("LedgeDetectionComponent"));
+
 	// Setup Mesh orientation (facing forward along X)
 	GetMesh()->SetRelativeLocation(FVector(0.f, 0.f, -96.f));
 	GetMesh()->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
@@ -91,6 +95,28 @@ ALedgeCharacter::ALedgeCharacter()
 			GetMesh()->SetSkeletalMesh(AltMeshFinder.Object);
 		}
 	}
+}
+
+void ALedgeCharacter::Jump()
+{
+	// Check for a mantleable ledge ahead
+	if (LedgeDetectionComponent)
+	{
+		FMantleLedgeInfo LedgeInfo;
+		if (LedgeDetectionComponent->DetectLedge(LedgeInfo))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Ledge Detected! Height: %.1f cm, Type: %s, Target Location: %s"),
+				LedgeInfo.MantleHeight,
+				(LedgeInfo.MantleType == EMantleType::HighMantle) ? TEXT("High Mantle (2m)") : TEXT("Low Mantle (1m)"),
+				*LedgeInfo.TargetTransform.GetLocation().ToString());
+
+			// In Step 3, we will trigger the ALS Relative Offset Mantle timeline here!
+			return;
+		}
+	}
+
+	// Default jump if no ledge was detected
+	Super::Jump();
 }
 
 void ALedgeCharacter::NotifyControllerChanged()
