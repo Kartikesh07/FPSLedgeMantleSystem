@@ -73,11 +73,14 @@ bool ULedgeDetectionComponent::DetectLedge(FMantleLedgeInfo& OutLedgeInfo)
 	// 5. Calculate Candidate Target Transform on the ledge
 	// Face perpendicular into the wall
 	const FRotator TargetRotation = FRotator(0.0f, (-WallHit.ImpactNormal).Rotation().Yaw, 0.0f);
-
-	// Push target inward past the wall edge so the capsule is fully supported
 	const FVector InwardDirection = -WallHit.ImpactNormal.GetSafeNormal2D();
-	const FVector TargetXY = WallHit.ImpactPoint + (InwardDirection * (CapsuleRadius + LedgeInwardOffset));
-	const float TargetZ = LedgeHit.ImpactPoint.Z + CapsuleHalfHeight + 2.0f; // 2cm clearance above surface
+
+	// Calculate the precise front lip where the vertical wall meets the top ledge surface
+	const FVector LedgeFrontLip = FVector(WallHit.ImpactPoint.X, WallHit.ImpactPoint.Y, LedgeHit.ImpactPoint.Z);
+
+	// Push target inward past the wall edge so the capsule lands firmly on top
+	const FVector TargetXY = LedgeFrontLip + (InwardDirection * (CapsuleRadius + LedgeInwardOffset));
+	const float TargetZ = LedgeFrontLip.Z + CapsuleHalfHeight + 2.0f; // 2cm clearance above surface
 	const FVector TargetLocation = FVector(TargetXY.X, TargetXY.Y, TargetZ);
 
 	// 6. Clearance Check (ensure capsule fits at target location)
@@ -98,6 +101,7 @@ bool ULedgeDetectionComponent::DetectLedge(FMantleLedgeInfo& OutLedgeInfo)
 	OutLedgeInfo.WallLocation = WallHit.ImpactPoint;
 	OutLedgeInfo.WallNormal = WallHit.ImpactNormal;
 	OutLedgeInfo.LedgeLocation = LedgeHit.ImpactPoint;
+	OutLedgeInfo.LedgeFrontLip = LedgeFrontLip;
 	OutLedgeInfo.MantleHeight = MantleHeight;
 	OutLedgeInfo.MantleType = (MantleHeight > 125.0f) ? EMantleType::HighMantle : EMantleType::LowMantle;
 

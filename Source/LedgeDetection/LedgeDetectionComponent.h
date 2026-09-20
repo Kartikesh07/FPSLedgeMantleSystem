@@ -33,9 +33,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection|Config")
 	float DownwardTraceRadius = 15.0f;
 
-	/** Inward push offset past the ledge edge to land the capsule stably */
+	/** Inward push offset past the ledge edge to land the capsule stably with realistic arm reach */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection|Config")
-	float LedgeInwardOffset = 30.0f;
+	float LedgeInwardOffset = 6.0f;
 
 	/** Collision channel used for wall and ledge traces */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection|Config")

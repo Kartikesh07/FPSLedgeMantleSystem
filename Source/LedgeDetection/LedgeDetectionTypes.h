@@ -36,6 +36,10 @@ struct FMantleLedgeInfo
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection")
 	FVector LedgeLocation = FVector::ZeroVector;
 
+	/** Front corner lip of the ledge where wall face meets top surface */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection")
+	FVector LedgeFrontLip = FVector::ZeroVector;
+
 	/** Height of the ledge relative to the character's feet */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge Detection")
 	float MantleHeight = 0.0f;
