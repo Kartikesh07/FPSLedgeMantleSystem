@@ -2,15 +2,19 @@
 
 #include "LedgeCharacter.h"
 #include "Camera/CameraComponent.h"
-#include "GameFramework/SpringArmComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "GameFramework/PlayerController.h"
-#include "LedgeDetectionComponent.h"
-#include "MotionWarpingComponent.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "GameFramework/Controller.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
-#include "Engine/Engine.h"
+#include "InputActionValue.h"
+
+#include "UObject/ConstructorHelpers.h"
+#include "InputMappingContext.h"
+#include "InputAction.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 
 ALedgeCharacter::ALedgeCharacter()
 {
@@ -22,96 +26,78 @@ ALedgeCharacter::ALedgeCharacter()
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
 
-	// Configure character movement for third person
-	GetCharacterMovement()->bOrientRotationToMovement = true; // Character moves in the direction of input...	
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 500.0f, 0.0f); // ...at this rotation rate
-	GetCharacterMovement()->MaxWalkSpeed = 600.f;
-	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
-	GetCharacterMovement()->AirControl = 0.35f;
+	// Configure character movement
+	GetCharacterMovement()->bOrientRotationToMovement = true;
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
 	GetCharacterMovement()->JumpZVelocity = 500.f;
+	GetCharacterMovement()->AirControl = 0.35f;
+	GetCharacterMovement()->MaxWalkSpeed = 500.f;
+	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
+	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
+	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
-	CameraBoom->TargetArmLength = 350.0f; // The camera follows at this distance behind the character	
-	CameraBoom->bUsePawnControlRotation = true; // Rotate the arm based on the controller
-	CameraBoom->SocketOffset = FVector(0.f, 0.f, 50.f);
-	CameraBoom->bEnableCameraLag = true;
-	CameraBoom->CameraLagSpeed = 10.0f;
+	CameraBoom->TargetArmLength = 400.0f;
+	CameraBoom->bUsePawnControlRotation = true;
+	CameraBoom->SocketOffset = FVector(0.0f, 0.0f, 50.0f);
 
 	// Create a follow camera
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
-	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName); // Attach camera to end of boom
-	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
+	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+	FollowCamera->bUsePawnControlRotation = false;
 
-	// Mesh standard alignment for mannequin inside capsule
+	// Setup Mesh orientation (facing forward along X)
 	GetMesh()->SetRelativeLocation(FVector(0.f, 0.f, -96.f));
 	GetMesh()->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
 
-	// Create Ledge Detection Component
-	LedgeDetectionComponent = CreateDefaultSubobject<ULedgeDetectionComponent>(TEXT("LedgeDetector"));
-
-	// Create Motion Warping Component
-	MotionWarpingComponent = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarpingComponent"));
-}
-
-bool ALedgeCharacter::IsLedgeTransitioning() const
-{
-	return LedgeDetectionComponent && LedgeDetectionComponent->IsTransitioning();
-}
-
-void ALedgeCharacter::Jump()
-{
-	if (LedgeDetectionComponent)
+	// Load default Enhanced Input assets
+	static ConstructorHelpers::FObjectFinder<UInputMappingContext> IMCFinder(TEXT("/Game/Input/IMC_Default.IMC_Default"));
+	if (IMCFinder.Succeeded())
 	{
-		// Don't trigger another mantle if already transitioning
-		if (LedgeDetectionComponent->IsTransitioning())
-		{
-			return;
-		}
-
-		FLedgeDetectionResult Result;
-		if (LedgeDetectionComponent->DetectLedge(Result))
-		{
-			FString ActionName = TEXT("Unknown");
-			switch (Result.ActionType)
-			{
-			case ELedgeActionType::Vault: ActionName = TEXT("Vault"); break;
-			case ELedgeActionType::LowMantle: ActionName = TEXT("Low Mantle"); break;
-			case ELedgeActionType::HighMantle: ActionName = TEXT("High Mantle"); break;
-			default: break;
-			}
-
-			const FString Msg = FString::Printf(TEXT("[Ledge Action] %s | Height: %.1f cm"),
-				*ActionName, Result.LedgeHeight);
-
-			if (GEngine)
-			{
-				GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan, Msg);
-			}
-			UE_LOG(LogTemp, Log, TEXT("%s"), *Msg);
-
-			// Start the smooth procedural transition
-			if (LedgeDetectionComponent->StartTransition(Result))
-			{
-				return;
-			}
-		}
+		DefaultMappingContext = IMCFinder.Object;
 	}
 
-	Super::Jump();
-}
+	static ConstructorHelpers::FObjectFinder<UInputAction> MoveActionFinder(TEXT("/Game/Input/IA_Move.IA_Move"));
+	if (MoveActionFinder.Succeeded())
+	{
+		MoveAction = MoveActionFinder.Object;
+	}
 
-void ALedgeCharacter::BeginPlay()
-{
-	Super::BeginPlay();
+	static ConstructorHelpers::FObjectFinder<UInputAction> LookActionFinder(TEXT("/Game/Input/IA_Look.IA_Look"));
+	if (LookActionFinder.Succeeded())
+	{
+		LookAction = LookActionFinder.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UInputAction> JumpActionFinder(TEXT("/Game/Input/IA_Jump.IA_Jump"));
+	if (JumpActionFinder.Succeeded())
+	{
+		JumpAction = JumpActionFinder.Object;
+	}
+
+	// Load default ALS Skeletal Mesh
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshFinder(TEXT("/Game/AdvancedLocomotionV4/CharacterAssets/MannequinSkeleton/Meshes/AnimMan.AnimMan"));
+	if (MeshFinder.Succeeded())
+	{
+		GetMesh()->SetSkeletalMesh(MeshFinder.Object);
+	}
+	else
+	{
+		static ConstructorHelpers::FObjectFinder<USkeletalMesh> AltMeshFinder(TEXT("/Game/AdvancedLocomotionV4/CharacterAssets/MannequinSkeleton/Meshes/Mannequin.Mannequin"));
+		if (AltMeshFinder.Succeeded())
+		{
+			GetMesh()->SetSkeletalMesh(AltMeshFinder.Object);
+		}
+	}
 }
 
 void ALedgeCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
 
-	// Add Input Mapping Context to Enhanced Input Subsystem
+	// Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
@@ -128,12 +114,13 @@ void ALedgeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
+	// Set up action bindings
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		// Jumping
 		if (JumpAction)
 		{
-			EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ALedgeCharacter::Jump);
+			EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 			EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 		}
 
@@ -153,25 +140,22 @@ void ALedgeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 void ALedgeCharacter::Move(const FInputActionValue& Value)
 {
-	// Ignore manual movement input during parkour transitions
-	if (IsLedgeTransitioning())
-	{
-		return;
-	}
-
+	// Input is a Vector2D (X = Right/Left, Y = Forward/Backward)
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
 	if (Controller != nullptr)
 	{
 		// Find out which way is forward
 		const FRotator Rotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0, Rotation.Yaw, 0);
+		const FRotator YawRotation(0.f, Rotation.Yaw, 0.f);
 
-		// Get forward and right direction vectors
+		// Get forward vector
 		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+
+		// Get right vector 
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
-		// Add movement
+		// Add movement input
 		AddMovementInput(ForwardDirection, MovementVector.Y);
 		AddMovementInput(RightDirection, MovementVector.X);
 	}
@@ -179,10 +163,12 @@ void ALedgeCharacter::Move(const FInputActionValue& Value)
 
 void ALedgeCharacter::Look(const FInputActionValue& Value)
 {
+	// Input is a Vector2D (X = Yaw, Y = Pitch)
 	const FVector2D LookAxisVector = Value.Get<FVector2D>();
 
 	if (Controller != nullptr)
 	{
+		// Add yaw and pitch input to controller
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
 	}

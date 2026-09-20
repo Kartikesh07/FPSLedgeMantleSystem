@@ -6,8 +6,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "LedgeGameMode.generated.h"
 
-UCLASS()
-class LEDGEDETECTION_API ALedgeGameMode : public AGameModeBase
+UCLASS(minimalapi)
+class ALedgeGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 
